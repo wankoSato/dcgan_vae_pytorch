@@ -1,5 +1,9 @@
 from __future__ import print_function
+
+# https://qiita.com/kzkadc/items/e4fc7bc9c003de1eb6d0
+# argument Parser
 import argparse
+
 import os
 import random
 import math
@@ -13,13 +17,21 @@ import torch.utils.data
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
+
+# visdom is visualize the process of learning
+# torchsummary is network summarizing tool
+# both are usefull!
+# https://qiita.com/yasudadesu/items/1dda5f9d1708b6d4d923
 import visdom
+
 from torch.autograd import Variable
 
 vis = visdom.Visdom()
 vis.env = 'vae_dcgan'
 
-
+# define argument parser
+# usage detail:
+# https://qiita.com/kzkadc/items/e4fc7bc9c003de1eb6d0
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', required=True, help='cifar10 | lsun | imagenet | folder | lfw ')
 parser.add_argument('--dataroot', required=True, help='path to dataset')
@@ -40,27 +52,35 @@ parser.add_argument('--netD', default='', help="path to netD (to continue traini
 parser.add_argument('--outf', default='.', help='folder to output images and model checkpoints')
 parser.add_argument('--manualSeed', type=int, help='manual seed')
 
+# optでparserの解析を実施する
 opt = parser.parse_args()
 print(opt)
 
 try:
-    os.makedirs(opt.outf)
+    os.makedirs(opt.outf) # 引数に渡されたディレクトリに出力imageとモデルのチェックポイントを書き込むディレクトリを作る
 except OSError:
-    pass
+    pass # もしエラーが発生した場合には何もしない
 
+# 引数にmanualSeedが渡された場合の処理
+# https://qiita.com/chat-flip/items/4c0b71a7c0f5f6ae437f
 if opt.manualSeed is None:
-    opt.manualSeed = random.randint(1, 10000)
-print("Random Seed: ", opt.manualSeed)
-random.seed(opt.manualSeed)
-torch.manual_seed(opt.manualSeed)
+    opt.manualSeed = random.randint(1, 10000) # manualSeedがNoneの場合、1~10000の間の一様乱数から整数を取得してseedにする
+print("Random Seed: ", opt.manualSeed) # 設定されたseedをprint
+random.seed(opt.manualSeed) # 乱数のseedにopt.manualSeedを設定
+torch.manual_seed(opt.manualSeed) # 畳み込み層の重みの乱数seedを設定
 if opt.cuda:
-    torch.cuda.manual_seed_all(opt.manualSeed)
+    torch.cuda.manual_seed_all(opt.manualSeed) # GPUを使う場合は別の設定にする
 
+# オートチューナが最適なアルゴリズムを見つける
+# https://qiita.com/koshian2/items/9877ed4fb3716eac0c37
 cudnn.benchmark = True
 
+# GPUが利用可能な環境だがopt.cuda引数がtrueでないときにwarningを出す処理
 if torch.cuda.is_available() and not opt.cuda:
     print("WARNING: You have a CUDA device, so you should probably run with --cuda")
-
+    
+# 画像データセットが以下のときの処理
+# 画像データセット毎に異なる前処理を実施している
 if opt.dataset in ['imagenet', 'folder', 'lfw']:
     # folder dataset
     dataset = dset.ImageFolder(root=opt.dataroot,
@@ -78,6 +98,7 @@ elif opt.dataset == 'lsun':
                             transforms.ToTensor(),
                             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                         ]))
+# cifar10の場合はcenterCropをしていない
 elif opt.dataset == 'cifar10':
     dataset = dset.CIFAR10(root=opt.dataroot, download=True,
                            transform=transforms.Compose([
@@ -86,10 +107,14 @@ elif opt.dataset == 'cifar10':
                                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                            ])
     )
-assert dataset
+assert dataset # datasetが空でないかどうかをチェックする https://qiita.com/nannoki/items/15004992b6bb5637a9cd
+
+# dataloaderの定義、より詳細はpytorchのチュートリアルを見ること
+# https://qiita.com/takurooo/items/e4c91c5d78059f92e76d
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batchSize,
                                          shuffle=True, num_workers=int(opt.workers))
 
+# argument parserから受け取った引数の値の一部をグローバル変数に格納
 ngpu = int(opt.ngpu)
 nz = int(opt.nz)
 ngf = int(opt.ngf)
@@ -98,14 +123,18 @@ nc = 3
 
 
 # custom weights initialization called on netG and netD
+# ネットワークの重みを初期化する関数の定義
+# netGならびにnetDに対して、applyで渡される関数であり、それぞれのネットワークのサブモジュールに対して実施される
+# https://tutorialmore.com/questions-56844.htm
 def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
+    classname = m.__class__.__name__ # 定義されたクラスの元のクラス名を取得する　https://ja.stackoverflow.com/questions/4556/%E3%83%A1%E3%83%B3%E3%83%90%E9%96%A2%E6%95%B0%E3%81%8B%E3%82%89%E3%82%AF%E3%83%A9%E3%82%B9%E3%81%AE%E5%90%8D%E5%89%8D%E3%82%92%E5%8F%96%E5%BE%97%E3%81%99%E3%82%8B%E6%96%B9%E6%B3%95
+    if classname.find('Conv') != -1: # classnameが含まれる場合の処理（.findで-1が返ってくると指定文字列は含まれていない） https://www.sejuku.net/blog/52207
         m.weight.data.normal_(0.0, 0.02)
     elif classname.find('BatchNorm') != -1:
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
 
+# sampling用のclass
 class _Sampler(nn.Module):
     def __init__(self):
         super(_Sampler, self).__init__()
