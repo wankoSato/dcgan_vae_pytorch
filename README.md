@@ -1,3 +1,6 @@
+This repository is forked from [dcgan_vae_pytorch](https://github.com/seangal/dcgan_vae_pytorch/).
+I study this by reading and commenting.
+
 # dcgan_vae_pytorch
 dcgan combined with vae in pytorch!
 
