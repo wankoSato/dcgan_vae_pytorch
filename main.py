@@ -134,14 +134,16 @@ def weights_init(m):
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
 
-# sampling用のclass
+# 潜在変数にGaussianを仮定し、そこからのサンプリング用のclass
+# VAEは潜在空間にGaussianを仮定するため
+# https://qiita.com/kenmatsu4/items/b029d697e9995d93aa24
 class _Sampler(nn.Module):
     def __init__(self):
         super(_Sampler, self).__init__()
         
     def forward(self,input):
         mu = input[0]
-        logvar = input[1]
+        logvar = input[1] # 分散共分散行列の対数
         
         std = logvar.mul(0.5).exp_() #calculate the STDEV
         if opt.cuda:
