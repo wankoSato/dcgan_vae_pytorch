@@ -140,13 +140,18 @@ def weights_init(m):
 # 潜在変数にGaussianを仮定し、そこからのサンプリング用のclass
 # VAEは潜在空間にGaussianを仮定するため
 # https://qiita.com/kenmatsu4/items/b029d697e9995d93aa24
+# この部分がReparameterization Trickに該当する
+# つまり、学習させるのは正規乱数のパラメータの方である
 class _Sampler(nn.Module):
     def __init__(self):
         super(_Sampler, self).__init__()
         
     def forward(self,input):
+        # inputは2要素のリストであり、index=0が平均値ベクトル、index=1が分散の対数となっている
+        # Samplerはencoderの出力の結果である2つのベクトルを引数としてとるため、
+        # 一方を平均ベクトル、もう一方を対数分散ベクトルとなるよう、重みをトレーニングする形となる
         mu = input[0]
-        logvar = input[1] # 分散共分散行列の対数
+        logvar = input[1] # 分散の対数
         
         std = logvar.mul(0.5).exp_() #calculate the STDEV
         if opt.cuda:
@@ -158,6 +163,7 @@ class _Sampler(nn.Module):
             # 上と同様
             eps = torch.FloatTensor(std.size()).normal_() #random normalized noise
         eps = Variable(eps) # 自動微分を有効にするためVariableクラスでラップする必要があったが、0.4以降は特にいらない？　https://codezine.jp/article/detail/11052
+        # 戻り値は標準正規分布乱数からmu,stdのパラメータに従う正規分布に戻したもの
         return eps.mul(std).add_(mu) 
     
 # encoderの定義
@@ -233,13 +239,18 @@ class _netG(nn.Module):
         self.encoder = _Encoder(imageSize)
         self.sampler = _Sampler()
         
+        # encoderと同様に繰り返し回数nはimageSize=2^nとしたときのnとする
+        # decoderではencoderの逆で倍々にupsamplingしていく
         n = math.log2(imageSize)
         
+        # imageSizeが規定に満たないときの処理
         assert n==round(n),'imageSize must be a power of 2'
         assert n>=3,'imageSize must be at least 8'
+        # forループを回すためにnを整数型に直す
         n=int(n)
 
         # decoderをencoderの逆として定義する
+        # まず最初にサイズnzのベクトルを入力値に取り、４ｘ４画像に拡大する
         self.decoder = nn.Sequential()
         # input is Z, going into a convolution
         self.decoder.add_module('input-conv', nn.ConvTranspose2d(nz, ngf * 2**(n-3), 4, 1, 0, bias=False))
@@ -248,63 +259,86 @@ class _netG(nn.Module):
 
         # state size. (ngf * 2**(n-3)) x 4 x 4
 
+        # 入力チャネル数、出力チャネル数はencoderの逆
+        # forループ内のコードはencoderと同じだが、rangeの定義が異なる
         for i in range(n-3, 0, -1):
             self.decoder.add_module('pyramid.{0}-{1}.conv'.format(ngf*2**i, ngf * 2**(i-1)),nn.ConvTranspose2d(ngf * 2**i, ngf * 2**(i-1), 4, 2, 1, bias=False))
             self.decoder.add_module('pyramid.{0}.batchnorm'.format(ngf * 2**(i-1)), nn.BatchNorm2d(ngf * 2**(i-1)))
             self.decoder.add_module('pyramid.{0}.relu'.format(ngf * 2**(i-1)), nn.LeakyReLU(0.2, inplace=True))
 
+        # 最終的に元のサイズに戻し、活性化関数tanhを通す
         self.decoder.add_module('ouput-conv', nn.ConvTranspose2d(    ngf,      nc, 4, 2, 1, bias=False))
         self.decoder.add_module('output-tanh', nn.Tanh())
 
-
+    # 順方向
+    # endocer-sampler-decoderの順に流して最終結果を得る
     def forward(self, input):
+        # GPUが使える場合
         if isinstance(input.data, torch.cuda.FloatTensor) and self.ngpu > 1:
             output = nn.parallel.data_parallel(self.encoder, input, range(self.ngpu))
             output = nn.parallel.data_parallel(self.sampler, output, range(self.ngpu))
             output = nn.parallel.data_parallel(self.decoder, output, range(self.ngpu))
+        # GPUが使えない場合
         else:
             output = self.encoder(input)
             output = self.sampler(output)
             output = self.decoder(output)
         return output
-    
+    # GPUが使える場合に備えてencoder,sampler,decoderをcuda用に変換する関数
+    # インスタンス化する際に登場する
     def make_cuda(self):
         self.encoder.cuda()
         self.sampler.cuda()
         self.decoder.cuda()
 
+# 生成ネットワークの定義
 netG = _netG(opt.imageSize,ngpu)
+# applyはnetG内でselfで定義されたサブモジュールに対して(fn)の関数を適用する
+# この場合はweights_initなので、重みの初期化を全サブモジュールに対して適用している
 netG.apply(weights_init)
+# すでに何らかの学習が行われておりnetGが空でない場合はすでにあるnetGから読み込みを行う
 if opt.netG != '':
     netG.load_state_dict(torch.load(opt.netG))
 print(netG)
 
-
+# Discriminatorモデルの定義
 class _netD(nn.Module):
     def __init__(self, imageSize, ngpu):
         super(_netD, self).__init__()
         self.ngpu = ngpu
+        # こちらも同じようにimageSize=2^nを定義する
         n = math.log2(imageSize)
         
+        # 画像サイズが規定外だったときの処理
         assert n==round(n),'imageSize must be a power of 2'
         assert n>=3,'imageSize must be at least 8'
         n=int(n)
+        
+        # 以下でモデルの定義を行う
         self.main = nn.Sequential()
 
         # input is (nc) x 64 x 64
+        # ここから画像サイズが半分ずつになっていく
+        # ndfはDiscriminator用の出力チャネル数
+        # デフォルトの場合、おおもとの入力チャネル数nc=3、最初の出力チャネル数ndf=64
         self.main.add_module('input-conv', nn.Conv2d(nc, ndf, 4, 2, 1, bias=False))
         self.main.add_module('relu', nn.LeakyReLU(0.2, inplace=True))
 
         # state size. (ndf) x 32 x 32
+        # 64x64の場合、n=6なので、0,1,2の繰り返し
+        # 32x32-16x16-8x8-4x4となり、このループの中では画像サイズが4x4になる
+        # ngfとなっているところはndfのtypo?
         for i in range(n-3):
             self.main.add_module('pyramid.{0}-{1}.conv'.format(ngf*2**(i), ngf * 2**(i+1)), nn.Conv2d(ndf * 2 ** (i), ndf * 2 ** (i+1), 4, 2, 1, bias=False))
             self.main.add_module('pyramid.{0}.batchnorm'.format(ngf * 2**(i+1)), nn.BatchNorm2d(ndf * 2 ** (i+1)))
             self.main.add_module('pyramid.{0}.relu'.format(ngf * 2**(i+1)), nn.LeakyReLU(0.2, inplace=True))
 
+        # 最後の層で出力チャネル数1、シグモイド関数にかける
         self.main.add_module('output-conv', nn.Conv2d(ndf * 2**(n-3), 1, 4, 1, 0, bias=False))
         self.main.add_module('output-sigmoid', nn.Sigmoid())
         
 
+    # 順方向、書いてあるそのまま
     def forward(self, input):
         if isinstance(input.data, torch.cuda.FloatTensor) and self.ngpu > 1:
             output = nn.parallel.data_parallel(self.main, input, range(self.ngpu))
@@ -313,23 +347,32 @@ class _netD(nn.Module):
 
         return output.view(-1, 1)
 
-
+# netGと同じように定義
 netD = _netD(opt.imageSize,ngpu)
 netD.apply(weights_init)
 if opt.netD != '':
     netD.load_state_dict(torch.load(opt.netD))
 print(netD)
 
+# 損失関数にはそれぞれBCELoss(Binary Cross Entropy Loss)とMSELoss(Mean Square Error)を使う
+# https://pytorch.org/docs/stable/nn.html
+# 必要におうじてもっと詳しく調べること
 criterion = nn.BCELoss()
 MSECriterion = nn.MSELoss()
 
+# 入力値のサイズを設定
 input = torch.FloatTensor(opt.batchSize, 3, opt.imageSize, opt.imageSize)
+# ノイズのサイズを設定、ノイズはバッチサイズx潜在変数ベクトル長x1x1
 noise = torch.FloatTensor(opt.batchSize, nz, 1, 1)
+# 固定ノイズをnoizeと同じサイズとし、標準正規分布からサンプリングする
 fixed_noise = torch.FloatTensor(opt.batchSize, nz, 1, 1).normal_(0, 1)
+# ラベルのサイズを設定、バッチサイズと同じ
 label = torch.FloatTensor(opt.batchSize)
+# 真であれば1、偽であれば0のラベルとする
 real_label = 1
 fake_label = 0
 
+# GPUが使える場合はすでに設定したモデル、変数をcuda用に変換しておく
 if opt.cuda:
     netD.cuda()
     netG.make_cuda()
@@ -338,28 +381,40 @@ if opt.cuda:
     input, label = input.cuda(), label.cuda()
     noise, fixed_noise = noise.cuda(), fixed_noise.cuda()
 
+# 自動微分用にVariableクラスに変換
+# 現在は必要ないか？
 input = Variable(input)
 label = Variable(label)
 noise = Variable(noise)
 fixed_noise = Variable(fixed_noise)
 
 # setup optimizer
+# 最適化法はnetD,netGいずれもAdamとする
 optimizerD = optim.Adam(netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 optimizerG = optim.Adam(netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 
 gen_win = None
 rec_win = None
 
+# ここから学習部分
+# 繰り返し回数はoptionで設定、デフォルトは25
 for epoch in range(opt.niter):
     for i, data in enumerate(dataloader, 0):
         ############################
         # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
         ###########################
+        # 先にDiscriminatorを訓練する
+        # data中の画像をreal、ノイズをfakeとしてrealが1になるように訓練していく
+        
         # train with real
+        # 勾配をゼロに初期化
         netD.zero_grad()
+        # dataから画像をとってくる
         real_cpu, _ = data
+        # 画像数をバッチサイズとする
         batch_size = real_cpu.size(0)
         input.data.resize_(real_cpu.size()).copy_(real_cpu)
+        # dataからとってきた画像のラベルをすべて1にする
         label.data.resize_(real_cpu.size(0)).fill_(real_label)
 
         output = netD(input)
