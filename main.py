@@ -115,12 +115,15 @@ dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batchSize,
                                          shuffle=True, num_workers=int(opt.workers))
 
 # argument parserから受け取った引数の値の一部をグローバル変数に格納
-ngpu = int(opt.ngpu)
-nz = int(opt.nz)
-ngf = int(opt.ngf)
-ndf = int(opt.ndf)
-nc = 3
+ngpu = int(opt.ngpu) # GPUの数
+nz = int(opt.nz) # 潜在変数のベクトル長 デフォルトは100
+ngf = int(opt.ngf) # デフォルトは64
+ndf = int(opt.ndf) # デフォルトは64
+nc = 3 # チャンネル数は3で固定
 
+# pytorchのConv2dについて
+# Conv2d(インプットのチャンネル数,アウトプットのチャンネル数,カーネルサイズ)
+# https://qiita.com/kazetof/items/6a72926b9f8cd44c218e#43-nnconv2d%E3%81%A8%E3%81%AF
 
 # custom weights initialization called on netG and netD
 # ネットワークの重みを初期化する関数の定義
@@ -147,48 +150,86 @@ class _Sampler(nn.Module):
         
         std = logvar.mul(0.5).exp_() #calculate the STDEV
         if opt.cuda:
+            # epsにstdのサイズと同じサイズのtensorを作る
+            # tensorの中身にはnormal_()でmean=0,std=1の正規分布に従う乱数を格納する
+            # https://pytorch.org/docs/stable/tensors.html#torch.Tensor.normal_
             eps = torch.cuda.FloatTensor(std.size()).normal_() #random normalized noise
         else:
+            # 上と同様
             eps = torch.FloatTensor(std.size()).normal_() #random normalized noise
-        eps = Variable(eps)
+        eps = Variable(eps) # 自動微分を有効にするためVariableクラスでラップする必要があったが、0.4以降は特にいらない？　https://codezine.jp/article/detail/11052
         return eps.mul(std).add_(mu) 
-
-
+    
+# encoderの定義
 class _Encoder(nn.Module):
+    # 初期化関数
+    # 引数に画像サイズをとる
     def __init__(self,imageSize):
         super(_Encoder, self).__init__()
-        
+        # 2を底とするXの対数を返す
+        # 2^n = imageSize なので、imageSizeは2のx乗でなければならない
+        # また、少なくとも3回は畳み込むのでimageSizeが8(2^3)でなければならない
         n = math.log2(imageSize)
         
+        # 条件に合致しないときの処理
         assert n==round(n),'imageSize must be a power of 2'
         assert n>=3,'imageSize must be at least 8'
+        # nを整数型に変換する
         n=int(n)
 
+        # pytorchのConv2dについて
+        # Conv2d(インプットのチャンネル数,アウトプットのチャンネル数,カーネルサイズ)
+        # https://qiita.com/kazetof/items/6a72926b9f8cd44c218e#43-nnconv2d%E3%81%A8%E3%81%AF
+        # more detail
+        # https://pytorch.org/docs/stable/nn.html
+        # (in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros')
+        
+        # ここではself.encoderの出力結果をチャネル数nzにして返す畳み込み層を定義している
+        # forwardで二つのvectorを返している
+        self.conv1 = nn.Conv2d(ngf * 2**(n-3), nz, 4) # (channel of Input, channel of output, kernel size)
+        self.conv2 = nn.Conv2d(ngf * 2**(n-3), nz, 4) # (channel of Input, channel of output, kernel size)
 
-        self.conv1 = nn.Conv2d(ngf * 2**(n-3), nz, 4)
-        self.conv2 = nn.Conv2d(ngf * 2**(n-3), nz, 4)
-
+        # encoderを畳み込み層-バッチノーマライゼーション-LeakyReLUの繰り返しで定義
         self.encoder = nn.Sequential()
         # input is (nc) x 64 x 64
+        # https://pytorch.org/docs/stable/nn.html
+        # (in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros')
+        # 入力チャネル数=3, outputチャネル数=ngf, カーネルサイス=4, ストライド2, パディング=1
+        # 出力サイズは ((H(W)+2P-Fh(Fn))/2)+1で計算できる
+        # 入力サイズが64x64の時、出力サイズは32x32になる
+        # 出力チャネル数はngfで定義（デフォルトで64）
         self.encoder.add_module('input-conv',nn.Conv2d(nc, ngf, 4, 2, 1, bias=False))
+        # 活性化関数にLeakyReLUを使用、x<0のときの傾きを0.2に固定
         self.encoder.add_module('input-relu',nn.LeakyReLU(0.2, inplace=True))
+        # 画像サイズが64x64のとき、64=2^5なのでn=6
+        # その場合、0～2(6-3=3なので)の繰り返しとなる
         for i in range(n-3):
             # state size. (ngf) x 32 x 32
+            # モジュールの名称をpyramid(入力チャネル数)-(出力チャネル数)としている
+            # 入力チャネル数および出力チャネル数は記載の通り、ngfの2^i倍ずつ増えていく
+            # カーネルサイズ、ストライド、パディングはずっと同じ、バイアスは使用しない
             self.encoder.add_module('pyramid.{0}-{1}.conv'.format(ngf*2**i, ngf * 2**(i+1)), nn.Conv2d(ngf*2**(i), ngf * 2**(i+1), 4, 2, 1, bias=False))
             self.encoder.add_module('pyramid.{0}.batchnorm'.format(ngf * 2**(i+1)), nn.BatchNorm2d(ngf * 2**(i+1)))
             self.encoder.add_module('pyramid.{0}.relu'.format(ngf * 2**(i+1)), nn.LeakyReLU(0.2, inplace=True))
+            # モジュールの繰り返しごとに画像サイズが半分になっていく
+            # 最終的に4x4の画像になるようにnが調整されている
+            # 最終的なチャネル数は2^(n-3)である。画像サイズ64x64の場合はngf*8となる
 
         # state size. (ngf*8) x 4 x 4
 
+    # encoderで入力画像を(ngf*8) x 4 x 4に畳み込み
+    # その出力をconv1,conv2にかけてnzのサイズの二つのベクトルに変換しreturn
     def forward(self,input):
         output = self.encoder(input)
         return [self.conv1(output),self.conv2(output)]
 
-
+# Generative Model全体の定義
+# decoder部分はencoderの逆を行う
 class _netG(nn.Module):
     def __init__(self, imageSize, ngpu):
         super(_netG, self).__init__()
         self.ngpu = ngpu
+        # すでに定義したEncoderとSamplerを定義
         self.encoder = _Encoder(imageSize)
         self.sampler = _Sampler()
         
@@ -198,6 +239,7 @@ class _netG(nn.Module):
         assert n>=3,'imageSize must be at least 8'
         n=int(n)
 
+        # decoderをencoderの逆として定義する
         self.decoder = nn.Sequential()
         # input is Z, going into a convolution
         self.decoder.add_module('input-conv', nn.ConvTranspose2d(nz, ngf * 2**(n-3), 4, 1, 0, bias=False))
