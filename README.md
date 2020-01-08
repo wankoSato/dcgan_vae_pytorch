@@ -49,3 +49,11 @@ optional arguments:
   --netG NETG           path to netG (to continue training)
   --netD NETD           path to netD (to continue training)
 ```
+
+_ここかららは追加分_
+
+## dataset
+
+[Body-parts dataset list](https://github.com/arXivTimes/arXivTimes/blob/a51bfe64a3862e4cceafa3863b777f473f6c0900/datasets/README.md#bodyparts)
+
+[IMDb-face](https://github.com/fwang91/IMDb-Face)
