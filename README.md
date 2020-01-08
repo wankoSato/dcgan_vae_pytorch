@@ -50,7 +50,7 @@ optional arguments:
   --netD NETD           path to netD (to continue training)
 ```
 
-_ここかららは追加分_
+_ここからは追加分_
 
 ## dataset
 
@@ -59,3 +59,15 @@ _ここかららは追加分_
 [IMDb-face](https://github.com/fwang91/IMDb-Face)
 
 [IMDb-face download script](https://github.com/IrvingShu/IMDb-Face-Download)
+
+## requirements
+
+- pytorch
+- torchvision
+- argparse
+- visdom
+visdomはrequest2.2.0が必要なので環境を作る時に注意すること
+
+それでも問題が起こるようならばcondaをupdateする
+[RemoveError: 'pyopenssl' is a dependency of conda and cannot be removed from conda's operating environment.が出た時にやったこと メモ](https://knaka20blue.hatenablog.com/entry/2019/02/25/131937)
+conda update --force conda
