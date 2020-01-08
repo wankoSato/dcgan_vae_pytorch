@@ -412,68 +412,104 @@ for epoch in range(opt.niter):
         # dataから画像をとってくる
         real_cpu, _ = data
         # 画像数をバッチサイズとする
+        # バッチサイズはdataloaderで定義されているので、その数分出てくる
         batch_size = real_cpu.size(0)
+        # 画像をリサイズしている？
         input.data.resize_(real_cpu.size()).copy_(real_cpu)
         # dataからとってきた画像のラベルをすべて1にする
         label.data.resize_(real_cpu.size(0)).fill_(real_label)
 
+        # 真の画像をnetDを通し、誤差を計算する
+        # 誤差関数はBinary Cross Entropy
         output = netD(input)
         errD_real = criterion(output, label)
+        # 逆伝播させる
         errD_real.backward()
         D_x = output.data.mean()
 
         # train with fake
+        # ノイズデータを使って偽画像を学習させる
+        # ノイズ画像のおおもとはencoderで出力されるベクトル長と同じ長さのベクトルであり、
+        # それをdecoderを通して画像にする
         noise.data.resize_(batch_size, nz, 1, 1)
         noise.data.normal_(0, 1)
+        # ノイズベクトルをdecoderに通して画像に変換
         gen = netG.decoder(noise)
         gen_win = vis.image(gen.data[0].cpu()*0.5+0.5,win = gen_win)
+        # labelはfakeにする
         label.data.fill_(fake_label)
+        # discriminatorを通して誤差を計算する
+        # 誤差関数はBCE
         output = netD(gen.detach())
         errD_fake = criterion(output, label)
+        # 逆伝播させる
         errD_fake.backward()
         D_G_z1 = output.data.mean()
+        # discriminatorにおける誤差はrealとfakeの合算とする
         errD = errD_real + errD_fake
+        # 重みを更新
         optimizerD.step()
         ############################
         # (2) Update G network: VAE
         ###########################
+        # VAE部分の学習
         
+        # 勾配の初期化
         netG.zero_grad()
         
+        # まずencoderに通して二つのベクトル（平均値ベクトルと対数分散ベクトル）を得る
         encoded = netG.encoder(input)
+        # 得られたベクトルをmu,logvarに入れてreparameterization trickにかける
         mu = encoded[0]
         logvar = encoded[1]
         
+        # samplerに行く前にKL divergenceを計算する
+        # なぜKLDを計算して損失関数に加えるのかは以下のサイトを参照
+        # https://qiita.com/nishiha/items/2264da933504fbe3fc68
         KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
         KLD = torch.sum(KLD_element).mul_(-0.5)
         
+        # 出力をsamplerに通して結果を得る
         sampled = netG.sampler(encoded)
+        # samplerの出力をdecoderに通して画像を得る
         rec = netG.decoder(sampled)
         rec_win = vis.image(rec.data[0].cpu()*0.5+0.5,win = rec_win)
         
+        # 出力画像と入力画像の誤差をMSEで計算
         MSEerr = MSECriterion(rec,input)
         
+        # MSEにKLDを加えてVAEの誤差とする
         VAEerr = KLD + MSEerr;
+        # 逆伝播
         VAEerr.backward()
+        # 重みを更新
         optimizerG.step()
 
         ############################
         # (3) Update G network: maximize log(D(G(z)))
         ###########################
+        # netGと競合させる
 
         label.data.fill_(real_label)  # fake labels are real for generator cost
 
+        # 入力画像をnetGに通す
         rec = netG(input) # this tensor is freed from mem at this point
+        # 得られた出力画像をnetDに通す
         output = netD(rec)
+        # 損失関数の計算
         errG = criterion(output, label)
+        # 逆伝播
         errG.backward()
         D_G_z2 = output.data.mean()
+        # 重みの更新
         optimizerG.step()
 
+        # 途中経過の出力
         print('[%d/%d][%d/%d] Loss_VAE: %.4f Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f / %.4f'
               % (epoch, opt.niter, i, len(dataloader),
                  VAEerr.data[0], errD.data[0], errG.data[0], D_x, D_G_z1, D_G_z2))
 
+    # 指定の間隔でモデルの保存
     if epoch%opt.saveInt == 0 and epoch!=0:
         torch.save(netG.state_dict(), '%s/netG_epoch_%d.pth' % (opt.outf, epoch))
         torch.save(netD.state_dict(), '%s/netD_epoch_%d.pth' % (opt.outf, epoch))
