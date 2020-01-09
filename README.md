@@ -54,11 +54,15 @@ _ここからは追加分_
 
 ## dataset
 
-[Body-parts dataset list](https://github.com/arXivTimes/arXivTimes/blob/a51bfe64a3862e4cceafa3863b777f473f6c0900/datasets/README.md#bodyparts)
+-[Body-parts dataset list](https://github.com/arXivTimes/arXivTimes/blob/a51bfe64a3862e4cceafa3863b777f473f6c0900/datasets/README.md#bodyparts)
+-[IMDb-face](https://github.com/fwang91/IMDb-Face)
+-[IMDb-face download script](https://github.com/IrvingShu/IMDb-Face-Download)
 
-[IMDb-face](https://github.com/fwang91/IMDb-Face)
+### aditional info - Asian facial image dataset
 
-[IMDb-face download script](https://github.com/IrvingShu/IMDb-Face-Download)
+[Can anyone help me find a database with asian faces?](https://www.researchgate.net/post/Can_anyone_help_me_find_a_database_with_asian_faces)
+- [The Asian Face Age Dataset (AFAD)](https://afad-dataset.github.io/)
+- [CASIA-FaceV5](http://biometrics.idealtest.org/dbDetailForUser.do?id=9)
 
 ## requirements
 
