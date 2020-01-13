@@ -80,7 +80,7 @@ conda update --force conda
 ## train by MNIST
 
 ![epoch1](MNIST_epoch1.PNG)
-![epoch200](MNIST_epoch.PNG)
+![epoch200](MNIST_epoch200.PNG)
 ![error](MNIST_learning.PNG)
 
 - 入出力画像サイズ32
