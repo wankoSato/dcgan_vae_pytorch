@@ -141,6 +141,12 @@ curl -Lb /tmp/cookie "https://drive.google.com/uc?export=download&confirm=${CODE
 - Windows上ではdataloaderのworkerを0にしないと正常に動作しなかったが、AWSでは任意の整数で動作する。GPUのパフォーマンスにも影響するので、AWSで実行する場合にはworkerの数を適切に設定するのを忘れないこと。
 - コード全般にかかわることだが、損失関数のMSECriterion = nn.MSELoss()はこのままでは正常に動作しない。MSECriterion = nn.MSELoss(reduction = 'sum')としてバッチ毎のlossの合計を出すようにしないと、適切に学習が進まないようだ。なお、MSELossのデフォルトはmeanだそうな。
 
+### celebA transition
+
+![face_transition](2sPymERwjvOYVO0m.gif)
+encodeした画像2つ分を一定の比率で混ぜ合わせ、decodeしたもの。
+こんな感じにtransitionします。
+
 ## AWSの環境設定
 
 すでに述べたように、今回はAWSのGPUインスタンスであるp2.xlargeを使用している。サーバ構築時にDeepLearning AMIを用いた。そのため、環境設定はほぼ不要である。Jupyterを使う場合にのみ、以下の設定が必要となる。
